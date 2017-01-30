@@ -1,6 +1,5 @@
 package com.yosriz.rxrecyclerpagination;
 
-
 import android.util.Log;
 
 import java.util.LinkedList;
@@ -13,7 +12,6 @@ import rx.functions.Action0;
 import rx.functions.Action1;
 import rx.functions.Cancellable;
 import rx.functions.Func1;
-import rx.subjects.BehaviorSubject;
 
 class ConcurrentSwitchMapTransformer<T, R> implements Observable.Transformer<T, R> {
 
@@ -53,7 +51,7 @@ class ConcurrentSwitchMapTransformer<T, R> implements Observable.Transformer<T, 
                     loadingDataQueue.addFirst(wrapper);
                     if (loadingDataQueue.size() == maxConcurrency + 1) {
                         ObservableWrapper<R> observableToRemoveData = loadingDataQueue.removeLast();
-                        Log.d(TAG, String.format("canceling oldest observable with data"));
+                        Log.d(TAG, "canceling oldest observable with data");
                         observableToRemoveData.terminate();
                     }
                 }
@@ -113,12 +111,5 @@ class ConcurrentSwitchMapTransformer<T, R> implements Observable.Transformer<T, 
             emitter.onCompleted();
         }
 
-    }
-
-
-    private class ObservableData {
-        Observable<R> observable;
-        BehaviorSubject<R> terminationSubject;
-        T data;
     }
 }

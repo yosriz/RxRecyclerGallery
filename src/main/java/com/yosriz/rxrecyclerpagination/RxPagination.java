@@ -8,26 +8,19 @@ import java.util.List;
 
 import rx.Observable;
 
-public final class RxPagination<T, VH extends RecyclerView.ViewHolder> {
+public final class RxPagination {
 
-    private final RxPaginationAdapter<T, VH> paginationAdapter;
+    public interface ViewHandlers<T, VH extends RecyclerView.ViewHolder> {
 
-    public interface VIewBinding<T> {
+        void onBindDataView(RecyclerView.ViewHolder holder, int position, T data);
 
-        void onBindView(RecyclerView.ViewHolder holder, int position, T data);
-    }
+        VH onCreateLoadingViewHolder(ViewGroup parent, int viewType);
 
-    public interface ViewHolderCreator<VH extends RecyclerView.ViewHolder> {
-
-        VH onCreateViewHolder(ViewGroup parent, int viewType);
+        VH onCreateDataViewHolder(ViewGroup parent, int viewType);
     }
 
     public interface DataLoader<T> {
         Observable<List<T>> loadData(int pageNum);
-    }
-
-    private RxPagination(RxPaginationAdapter<T, VH> paginationAdapter) {
-        this.paginationAdapter = paginationAdapter;
     }
 
     public static <T, VH extends RecyclerView.ViewHolder> Builder<T, VH> with(RecyclerView recyclerView) {
@@ -37,32 +30,20 @@ public final class RxPagination<T, VH extends RecyclerView.ViewHolder> {
     public static class Builder<T, VH extends RecyclerView.ViewHolder> {
         private final RecyclerView recyclerView;
         private int pageSize;
-        private VIewBinding<T> dataViewBinding;
-        private ViewHolderCreator<VH> viewHolderCreator;
-        private VIewBinding<T> loadingViewBinding;
+        private ViewHandlers<T, VH> viewHandlers;
         private DataLoader dataLoader;
 
         private Builder(RecyclerView recyclerView) {
             this.recyclerView = recyclerView;
         }
 
-        public Builder<T, VH> setViewHolderCreator(ViewHolderCreator<VH> viewHolderCreator) {
-            this.viewHolderCreator = viewHolderCreator;
-            return this;
-        }
-
-        public Builder<T, VH> setLoadingViewBinding(VIewBinding loadingViewBinding) {
-            this.loadingViewBinding = loadingViewBinding;
+        public Builder<T, VH> setViewHandlers(ViewHandlers<T, VH> viewHandlers) {
+            this.viewHandlers = viewHandlers;
             return this;
         }
 
         public Builder<T, VH> setPageSize(int pageSize) {
             this.pageSize = pageSize;
-            return this;
-        }
-
-        public Builder<T, VH> setDataViewBinding(VIewBinding dataViewBinding) {
-            this.dataViewBinding = dataViewBinding;
             return this;
         }
 
@@ -72,8 +53,7 @@ public final class RxPagination<T, VH extends RecyclerView.ViewHolder> {
         }
 
         public RxPaginationAdapter<T, VH> build() {
-            RxPaginationAdapter<T, VH> adapter = new RxPaginationAdapter<>(recyclerView, pageSize,
-                    dataViewBinding, loadingViewBinding, viewHolderCreator, dataLoader);
+            RxPaginationAdapter<T, VH> adapter = new RxPaginationAdapter<>(recyclerView, pageSize, viewHandlers, dataLoader);
             recyclerView.setAdapter(adapter);
             return adapter;
         }

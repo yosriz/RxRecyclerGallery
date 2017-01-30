@@ -12,7 +12,6 @@ import android.view.ViewGroup;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -28,24 +27,15 @@ import rx.schedulers.Schedulers;
 public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends RecyclerView.Adapter<VH> {
 
     private static final String TAG = RxPaginationAdapter.class.getSimpleName();
-    public static final int LOAD_DATA_RETRY_COUNT = 2;
+    private static final int LOAD_DATA_RETRY_COUNT = 2;
     private static final long LOADING_TIMEOUT_MILLIS = 5000;
-    private final Object maxConcurrentLock = new Object();
-    LinkedList<Observable> loadingDataQueue = new LinkedList<Observable>();
-
-    public interface PaginationAdapterEvents {
-
-        void onPageRequested(int pageNum);
-    }
-
     private static final int VIEW_TYPE_LOADING = 0;
     private static final int VIEW_TYPE_DATA = 1;
     private static final int THROTTLING_INTERVAL_MILLIS = 500;
     private static final int CACHE_SIZE = 50;
     private static final int MAX_CONCURRENCY = 5;
-    private final int pageSize;
 
-    private PaginationAdapterEvents listener;
+    private final int pageSize;
     private int dataCount = -1;
     private RecyclerView recyclerView;
     private LruCache<Integer, List<T>> pagesCache;
@@ -53,23 +43,18 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
     private RxPagination.DataLoader dataLoader;
     private Set<Integer> currentPagesLoadInProgress;
     private final Object lock = new Object();
-    private final RxPagination.VIewBinding<T> dataViewBinding;
-    private final RxPagination.ViewHolderCreator<VH> viewHolderCreator;
-    private final RxPagination.VIewBinding<T> loadingViewBinding;
+    private final RxPagination.ViewHandlers<T, VH> viewHandlers;
 
-    protected class PageData {
-        public int pageNum;
-        public List<T> data;
+    private class PageData {
+        int pageNum;
+        List<T> data;
     }
 
-    public RxPaginationAdapter(RecyclerView recyclerView, int pageSize, RxPagination.VIewBinding<T> dataViewBinding,
-                               RxPagination.VIewBinding<T> loadingViewBinding, RxPagination.ViewHolderCreator<VH> viewHolderCreator,
-                               RxPagination.DataLoader dataLoader) {
+    RxPaginationAdapter(RecyclerView recyclerView, int pageSize,
+                               RxPagination.ViewHandlers<T, VH> viewHandlers, RxPagination.DataLoader dataLoader) {
         this.pageSize = pageSize;
         this.dataLoader = dataLoader;
-        this.dataViewBinding = dataViewBinding;
-        this.viewHolderCreator = viewHolderCreator;
-        this.loadingViewBinding = loadingViewBinding;
+        this.viewHandlers = viewHandlers;
 
         pagesCache = new LruCache<>(CACHE_SIZE);
         currentPagesLoadInProgress = Collections.synchronizedSet(new HashSet<Integer>());
@@ -117,31 +102,6 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                                 return loadDataObservable(pageNum);
                             }
                         }))
-               /* .flatMap(new Func1<Integer, Observable<PageData>>() {
-                    @Override
-                    public Observable<PageData> call(final Integer pageNum) {
-                        Log.d(TAG, String.format("creating loadDataObservable -  for pageNum = %d, runningObservablesCount = %d , maxConcurrency = %d", pageNum,
-                                loadingDataQueue.size(), MAX_CONCURRENCY));
-                        final Observable<PageData> loadDataObservable = loadDataObservable(pageNum);
-                        synchronized (maxConcurrentLock) {
-                            loadingDataQueue.addFirst(loadDataObservable);
-                            if (loadingDataQueue.size() == MAX_CONCURRENCY + 1) {
-                                Log.d(TAG, String.format("creating loadDataObservable - canceling oldest observable"));
-                                loadingDataQueue.removeLast().takeUntil(Observable.just(null));
-                            }
-                        }
-                        return loadDataObservable.doOnTerminate(new Action0() {
-                            @Override
-                            public void call() {
-                                Log.d(TAG, String.format("creating loadDataObservable - removing #%d observable from queue.", pageNum));
-                                synchronized (maxConcurrentLock) {
-                                    loadingDataQueue.remove(loadDataObservable);
-                                }
-                            }
-                        });
-                    }
-                })*/
-                //.compose(new ConcurrentSwitchMapTransformer<PageData>(MAX_CONCURRENCY))
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(loadDataSubscriber);
         visiblePagesEvents
@@ -317,14 +277,6 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
         return visiblePages;
     }
 
-    public void setPageEventsListener(PaginationAdapterEvents listener) {
-        this.listener = listener;
-    }
-
-    public void removePageEventsListener() {
-        this.listener = null;
-    }
-
     public void setDataCount(int dataCount) {
         this.dataCount = dataCount;
     }
@@ -337,43 +289,13 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
         notifyItemRangeChanged(pageStart, pageSize);
     }
 
-   /* public void pageDataReady(List<T> data, int pageNumber) {
-        Log.d(TAG, String.format("pageDataReady for page = %s", pageNumber));
-        printLastRequested("pageDataReady");
-        if (isCurrentlyLoading(pageNumber)) {
-            PageData pageData = new PageData();
-            pageData.data = data;
-            pageData.pageNum = pageNumber;
-            //loadedPages.add(pageData);
-            pagesCache.put(pageNumber, data);
-
-            int pageStart = pageNumber * pageSize;
-            notifyItemRangeChanged(pageStart, pageSize);
-        }
-    }*/
-
     @Override
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
         int newRequestedPage = position / pageSize;
-        //Log.d(TAG, String.format("onBindViewHolder for position = %d, page = %d", position, newRequestedPage));
-        //printLoadedPages("onBindViewHolder");
 
         if (isPageLoaded(newRequestedPage)) {
             bindDataViewHolder(holder, getData(position, newRequestedPage), position);
-        } else {
-            bindLoadingViewHolder(holder, position);
         }
-    }
-
-    private void printLastRequested(String prefix) {
-    }
-
-    private void printLoadedPages(String prefix) {
-        String nums = prefix + " - loadedPages = ";
-        for (Integer pageNum : pagesCache.snapshot().keySet()) {
-            nums += pageNum + ",";
-        }
-        Log.d(TAG, nums);
     }
 
     private T getData(int position, int pageNum) {
@@ -382,17 +304,8 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
             int index = position - (pageNum * pageSize);
             return pageData.get(index);
         }
-        //Log.e(TAG, String.format("ERROR! cannot find data for location %d", position));
         return null;
     }
-/*
-    private boolean isCurrentlyLoading(int pageNum) {
-        for (Integer loadedPage : lastRequestedPages) {
-            if (pageNum == loadedPage)
-                return true;
-        }
-        return false;
-    }*/
 
     private boolean isPageLoaded(int pageNum) {
         return isPageLoaded(pageNum, false);
@@ -416,27 +329,23 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
         return position;
     }
 
-    protected int getPageSize() {
-        return pageSize;
-    }
-
     @Override
     public int getItemViewType(int position) {
         return isPageLoaded(position / pageSize) ? VIEW_TYPE_LOADING : VIEW_TYPE_DATA;
     }
 
-    protected void bindDataViewHolder(RecyclerView.ViewHolder holder, T dataItem, int position) {
+    private void bindDataViewHolder(RecyclerView.ViewHolder holder, T dataItem, int position) {
         if (dataItem != null) {
-            this.dataViewBinding.onBindView(holder, position, dataItem);
+            this.viewHandlers.onBindDataView(holder, position, dataItem);
         }
-    }
-
-    protected void bindLoadingViewHolder(RecyclerView.ViewHolder holder, int position) {
-        this.loadingViewBinding.onBindView(holder, position, null);
     }
 
     @Override
     public VH onCreateViewHolder(ViewGroup parent, int viewType) {
-        return this.viewHolderCreator.onCreateViewHolder(parent, viewType);
+        if (viewType == VIEW_TYPE_DATA) {
+            return this.viewHandlers.onCreateDataViewHolder(parent, viewType);
+        } else {
+            return this.viewHandlers.onCreateLoadingViewHolder(parent, viewType);
+        }
     }
 }
