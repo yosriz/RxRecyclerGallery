@@ -5,7 +5,6 @@ import android.support.v7.widget.GridLayoutManager;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.StaggeredGridLayoutManager;
-import android.util.Log;
 import android.util.LruCache;
 import android.view.ViewGroup;
 
@@ -26,14 +25,13 @@ import rx.schedulers.Schedulers;
 
 public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends RecyclerView.Adapter<VH> {
 
-    private static final String TAG = RxPaginationAdapter.class.getSimpleName();
     private static final int LOAD_DATA_RETRY_COUNT = 2;
     private static final long LOADING_TIMEOUT_MILLIS = 5000;
     private static final int VIEW_TYPE_LOADING = 0;
     private static final int VIEW_TYPE_DATA = 1;
     private static final int THROTTLING_INTERVAL_MILLIS = 500;
     private static final int CACHE_SIZE = 50;
-    private static final int MAX_CONCURRENCY = 5;
+    private static final int MAX_CONCURRENCY = 2;
 
     private final int pageSize;
     private int dataCount = -1;
@@ -75,7 +73,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                 .flatMap(new Func1<Integer[], Observable<Integer>>() {
                     @Override
                     public Observable<Integer> call(Integer[] integers) {
-                        Log.d("TAG", "visiblePagesSingleEvents for pages " + integers[0] + ',' + integers[1]);
+                        Logger.d("visiblePagesSingleEvents for pages " + integers[0] + ',' + integers[1]);
                         return Observable.from(integers);
                     }
                 });
@@ -89,7 +87,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                             if (canLoad) {
                                 currentPagesLoadInProgress.add(pageNum);
                             }
-                            Log.d("TAG", "visiblePagesSingleEvents " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+                            Logger.d("visiblePagesSingleEvents " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
                             return canLoad;
                         }
                     }
@@ -120,7 +118,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                             if (canLoad) {
                                 currentPagesLoadInProgress.add(pageNum);
                             }
-                            Log.d("TAG", "prev data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+                            Logger.d("prev data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
                             return canLoad;
                         }
                     }
@@ -151,7 +149,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                             if (canLoad) {
                                 currentPagesLoadInProgress.add(pageNum);
                             }
-                            Log.d("TAG", "next data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+                            Logger.d("next data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
                             return canLoad;
                         }
                     }
@@ -170,15 +168,13 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
 
     private boolean isPageLoadingOrLoaded(Integer pageNum) {
         boolean loadInProgress = currentPagesLoadInProgress.contains(pageNum);
-        Log.d(TAG, String.format("page %d is %s loading.", pageNum, loadInProgress ? "" : "NOT"));
+        Logger.d(String.format("page %d is %s loading.", pageNum, loadInProgress ? "" : "NOT"));
         return loadInProgress || isPageLoaded(pageNum, true);
     }
 
     @SuppressWarnings("unchecked")
     private Observable<PageData> loadDataObservable(final Integer pageNum) {
         return dataLoader.loadData(pageNum)
-                .timeout(LOADING_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                .retry(LOAD_DATA_RETRY_COUNT)
                 .map(new Func1<List<T>, PageData>() {
                     @Override
                     public PageData call(List<T> data) {
@@ -195,14 +191,14 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                 .doOnNext(new Action1<PageData>() {
                     @Override
                     public void call(PageData pageData) {
-                        Log.d(TAG, "loadDataObservable doOnNext for page = " + pageData.pageNum);
+                        Logger.d("loadDataObservable doOnNext for page = " + pageData.pageNum);
                     }
                 })
                 .doOnTerminate(new Action0() {
                     @Override
                     public void call() {
                         synchronized (lock) {
-                            Log.d(TAG, "loadDataObservable doOnTerminate for page = " + pageNum);
+                            Logger.d("loadDataObservable doOnTerminate for page = " + pageNum);
                             currentPagesLoadInProgress.remove(pageNum);
                         }
                     }
@@ -210,14 +206,14 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                 .doOnUnsubscribe(new Action0() {
                     @Override
                     public void call() {
-                        Log.d(TAG, "loadDataObservable doOnUnsubscribe for page = " + pageNum);
+                        Logger.d("loadDataObservable doOnUnsubscribe for page = " + pageNum);
                         currentPagesLoadInProgress.remove(pageNum);
                     }
                 })
                 .onErrorReturn(new Func1<Throwable, PageData>() {
                     @Override
                     public PageData call(Throwable throwable) {
-                        Log.e(TAG, "loadDataObservable onErrorReturn\n", throwable);
+                        Logger.e(throwable, "loadDataObservable onErrorReturn\n");
                         return null;
                     }
                 })
@@ -228,12 +224,12 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
 
         @Override
         public void onCompleted() {
-            Log.d(TAG, "loadDataSubscriber - onCompleted\n");
+            Logger.d("loadDataSubscriber - onCompleted\n");
         }
 
         @Override
         public void onError(Throwable e) {
-            Log.e(TAG, "loadDataSubscriber onError\n", e);
+            Logger.e(e, "loadDataSubscriber onError\n");
         }
 
         @Override
@@ -268,7 +264,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
 
             visiblePages[0] = firstVisibleIndex / pageSize;
             visiblePages[1] = lastVisibleIndex / pageSize;
-            Log.d(TAG, String.format("findVisiblePages pages are = [%d - %d]", visiblePages[0], visiblePages[1]));
+            Logger.d(String.format("findVisiblePages pages are = [%d - %d]", visiblePages[0], visiblePages[1]));
         } catch (Exception e) {
             visiblePages[0] = 0;
             visiblePages[1] = 0;
@@ -282,7 +278,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
     }
 
     private void dataReady(PageData pageData) {
-        Log.d(TAG, String.format("dataReady for page = %s", pageData.pageNum));
+        Logger.d(String.format("dataReady for page = %s", pageData.pageNum));
         pagesCache.put(pageData.pageNum, pageData.data);
 
         int pageStart = pageData.pageNum * pageSize;
@@ -314,7 +310,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
     private boolean isPageLoaded(int pageNum, boolean log) {
         boolean isLoaded = pagesCache.get(pageNum) != null;
         if (log) {
-            Log.d(TAG, String.format("page %d is %s loaded.", pageNum, isLoaded ? "" : "NOT"));
+            Logger.d(String.format("page %d is %s loaded.", pageNum, isLoaded ? "" : "NOT"));
         }
         return isLoaded;
     }
