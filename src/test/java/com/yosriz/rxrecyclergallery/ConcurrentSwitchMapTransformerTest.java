@@ -1,4 +1,4 @@
-package com.yosriz.rxrecyclerpagination;
+package com.yosriz.rxrecyclergallery;
 
 import android.support.annotation.NonNull;
 
@@ -18,7 +18,7 @@ import rx.functions.Func2;
 import rx.observers.TestSubscriber;
 import rx.schedulers.Schedulers;
 
-import static com.yosriz.rxrecyclerpagination.TestLogger.log;
+import static com.yosriz.rxrecyclergallery.TestLogger.log;
 
 @RunWith(Parameterized.class)
 public class ConcurrentSwitchMapTransformerTest {

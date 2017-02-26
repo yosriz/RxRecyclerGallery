@@ -1,4 +1,4 @@
-package com.yosriz.rxrecyclerpagination;
+package com.yosriz.rxrecyclergallery;
 
 
 import android.util.Log;
@@ -11,7 +11,7 @@ class Logger {
     private static final int MAX_TAG_LENGTH = 23;
     private static final int CALL_STACK_INDEX = 2;
     private static final Pattern ANONYMOUS_CLASS = Pattern.compile("(\\$\\d+)+$");
-    private static final boolean shouldLog = BuildConfig.DEBUG || Log.isLoggable("rxrecyclerpagination", Log.DEBUG);
+    private static final boolean shouldLog = BuildConfig.DEBUG || Log.isLoggable("rxrecyclergallery", Log.DEBUG);
 
     public static void d(String format, Object... args) {
         if (shouldLog) {

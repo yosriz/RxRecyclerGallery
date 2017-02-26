@@ -1,4 +1,4 @@
-package com.yosriz.rxrecyclerpagination;
+package com.yosriz.rxrecyclergallery;
 
 
 import android.support.v7.widget.RecyclerView;

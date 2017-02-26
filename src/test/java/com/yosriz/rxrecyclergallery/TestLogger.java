@@ -1,7 +1,5 @@
-package com.yosriz.rxrecyclerpagination;
+package com.yosriz.rxrecyclergallery;
 
-
-import android.annotation.SuppressLint;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
