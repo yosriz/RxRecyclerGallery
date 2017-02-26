@@ -1,6 +1,7 @@
 package com.yosriz.rxrecyclerpagination;
 
 
+import android.support.annotation.NonNull;
 import android.support.v7.widget.GridLayoutManager;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
@@ -17,141 +18,141 @@ import java.util.concurrent.TimeUnit;
 
 import rx.Observable;
 import rx.Subscriber;
+import rx.Subscription;
 import rx.android.schedulers.AndroidSchedulers;
 import rx.functions.Action0;
-import rx.functions.Action1;
 import rx.functions.Func1;
 import rx.schedulers.Schedulers;
+import rx.subscriptions.CompositeSubscription;
 
 public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends RecyclerView.Adapter<VH> {
 
-    private static final int LOAD_DATA_RETRY_COUNT = 2;
-    private static final long LOADING_TIMEOUT_MILLIS = 5000;
     private static final int VIEW_TYPE_LOADING = 0;
     private static final int VIEW_TYPE_DATA = 1;
-    private static final int THROTTLING_INTERVAL_MILLIS = 500;
-    private static final int CACHE_SIZE = 50;
-    private static final int MAX_CONCURRENCY = 2;
 
     private final int pageSize;
-    private int dataCount = -1;
-    private RecyclerView recyclerView;
-    private LruCache<Integer, List<T>> pagesCache;
-    private Integer[] visiblePages = new Integer[2];
-    private RxPagination.DataLoader dataLoader;
-    private Set<Integer> currentPagesLoadInProgress;
+    private final RecyclerView recyclerView;
     private final Object lock = new Object();
     private final RxPagination.ViewHandlers<T, VH> viewHandlers;
+    private final LruCache<Integer, List<T>> pagesCache;
+    private final Integer[] visiblePages = new Integer[2];
+    private final RxPagination.DataLoader dataLoader;
+    private final Set<Integer> currentPagesLoadInProgress;
+    private final long intervalMillis;
+    private final int concurrencyLevel;
+    private Observable<Integer[]> visiblePagesEvents;
+    private CompositeSubscription subscriptions;
+    private int dataCount = -1;
 
     private class PageData {
         int pageNum;
         List<T> data;
     }
 
-    RxPaginationAdapter(RecyclerView recyclerView, int pageSize,
-                               RxPagination.ViewHandlers<T, VH> viewHandlers, RxPagination.DataLoader dataLoader) {
+    RxPaginationAdapter
+            (RecyclerView recyclerView, int pageSize, RxPagination.ViewHandlers<T, VH> viewHandlers, RxPagination.DataLoader dataLoader,
+             long intervalMillis, int cacheSize, int concurrencyLevel) {
         this.pageSize = pageSize;
         this.dataLoader = dataLoader;
         this.viewHandlers = viewHandlers;
-
-        pagesCache = new LruCache<>(CACHE_SIZE);
-        currentPagesLoadInProgress = Collections.synchronizedSet(new HashSet<Integer>());
+        this.intervalMillis = intervalMillis;
+        this.concurrencyLevel = concurrencyLevel;
+        this.pagesCache = new LruCache<>(cacheSize);
+        this.currentPagesLoadInProgress = Collections.synchronizedSet(new HashSet<Integer>());
         this.recyclerView = recyclerView;
 
+        initObservables();
 
-        Observable<Integer[]> visiblePagesEvents =
-                RxRecyclerViewEvents.scrollEvents(recyclerView)
-                        .throttleLast(THROTTLING_INTERVAL_MILLIS, TimeUnit.MILLISECONDS)
-                        .map(new Func1<RxRecyclerViewEvents.ScrollEvent, Integer[]>() {
-                            @Override
-                            public Integer[] call(RxRecyclerViewEvents.ScrollEvent scrollEvent) {
-                                return findVisiblePages();
-                            }
-                        });
+        setHasStableIds(true);
+    }
 
-        Observable<Integer> visiblePagesSingleEvents = visiblePagesEvents
+    private void initObservables() {
+        subscriptions = new CompositeSubscription();
+        visiblePagesEvents = createSharedVisiblePagesEvent(recyclerView);
+        fetchVisiblePage();
+        prefetchPreviousPage();
+        prefetchNextPage();
+    }
+
+    @Override
+    public void onDetachedFromRecyclerView(RecyclerView recyclerView) {
+        super.onDetachedFromRecyclerView(recyclerView);
+
+        subscriptions.unsubscribe();
+    }
+
+    @Override
+    public void onAttachedToRecyclerView(RecyclerView recyclerView) {
+        super.onAttachedToRecyclerView(recyclerView);
+
+        if (subscriptions.isUnsubscribed()) {
+            subscriptions = new CompositeSubscription();
+            initObservables();
+        }
+    }
+
+    private Observable<Integer[]> createSharedVisiblePagesEvent(RecyclerView recyclerView) {
+        return RxRecyclerViewEvents.scrollEvents(recyclerView)
+                .throttleLast(intervalMillis, TimeUnit.MILLISECONDS)
+                .map(new Func1<RxRecyclerViewEvents.ScrollEvent, Integer[]>() {
+                    @Override
+                    public Integer[] call(RxRecyclerViewEvents.ScrollEvent scrollEvent) {
+                        return findVisiblePages();
+                    }
+                });
+    }
+
+    private void fetchVisiblePage() {
+        Subscription subscribe = visiblePagesEvents
                 .flatMap(new Func1<Integer[], Observable<Integer>>() {
                     @Override
                     public Observable<Integer> call(Integer[] integers) {
                         Logger.d("visiblePagesSingleEvents for pages " + integers[0] + ',' + integers[1]);
                         return Observable.from(integers);
                     }
-                });
-
-        visiblePagesSingleEvents
+                })
                 .filter(new Func1<Integer, Boolean>() {
                     @Override
                     public Boolean call(Integer pageNum) {
-                        synchronized (lock) {
-                            boolean canLoad = !isPageLoadingOrLoaded(pageNum);
-                            if (canLoad) {
-                                currentPagesLoadInProgress.add(pageNum);
-                            }
-                            Logger.d("visiblePagesSingleEvents " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
-                            return canLoad;
-                        }
+                        return tryAcquireLockFoVisiblePageTask(pageNum);
                     }
                 })
-                .subscribeOn(Schedulers.io())
-                .compose(
-                        new ConcurrentSwitchMapTransformer<>(MAX_CONCURRENCY, new Func1<Integer, Observable<PageData>>() {
-                            @Override
-                            public Observable<PageData> call(Integer pageNum) {
-                                return loadDataObservable(pageNum);
-                            }
-                        }))
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(loadDataSubscriber);
-        visiblePagesEvents
-                .map(new Func1<Integer[], Integer>() {
-                    @Override
-                    public Integer call(Integer[] pages) {
-                        return pages[0] - 1;
-                    }
-                })
-                .subscribeOn(Schedulers.io())
-                .filter(new Func1<Integer, Boolean>() {
-                    @Override
-                    public Boolean call(Integer pageNum) {
-                        synchronized (lock) {
-                            boolean canLoad = pageNum >= 0 && !isPageLoadingOrLoaded(pageNum);
-                            if (canLoad) {
-                                currentPagesLoadInProgress.add(pageNum);
-                            }
-                            Logger.d("prev data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
-                            return canLoad;
-                        }
-                    }
-                })
-                .switchMap(new Func1<Integer, Observable<PageData>>() {
+                .compose(new ConcurrentSwitchMapTransformer<>(concurrencyLevel, new Func1<Integer, Observable<PageData>>() {
                     @Override
                     public Observable<PageData> call(Integer pageNum) {
                         return loadDataObservable(pageNum);
                     }
-                })
+                }))
+                .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(loadDataSubscriber);
+        subscriptions.add(subscribe);
+    }
 
-        visiblePagesEvents
+    @NonNull
+    private Boolean tryAcquireLockFoVisiblePageTask(Integer pageNum) {
+        synchronized (lock) {
+            boolean canLoad = !isPageLoadingOrLoaded(pageNum);
+            if (canLoad) {
+                currentPagesLoadInProgress.add(pageNum);
+            }
+            Logger.d("visiblePagesSingleEvents " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+            return canLoad;
+        }
+    }
+
+    private void prefetchNextPage() {
+        Subscription subscribe = visiblePagesEvents
                 .map(new Func1<Integer[], Integer>() {
                     @Override
                     public Integer call(Integer[] pages) {
                         return pages[1] + 1;
                     }
                 })
-                .subscribeOn(Schedulers.io())
                 .filter(new Func1<Integer, Boolean>() {
                     @Override
                     public Boolean call(Integer pageNum) {
-                        synchronized (lock) {
-                            boolean canLoad = (dataCount < 0 || pageNum < dataCount / RxPaginationAdapter.this.pageSize)
-                                    && !isPageLoadingOrLoaded(pageNum);
-                            if (canLoad) {
-                                currentPagesLoadInProgress.add(pageNum);
-                            }
-                            Logger.d("next data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
-                            return canLoad;
-                        }
+                        return tryAcquireLockForNextPageTask(pageNum);
                     }
                 })
                 .switchMap(new Func1<Integer, Observable<PageData>>() {
@@ -160,15 +161,66 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                         return loadDataObservable(pageNum);
                     }
                 })
+                .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(loadDataSubscriber);
+        subscriptions.add(subscribe);
+    }
 
-        setHasStableIds(true);
+    @NonNull
+    private Boolean tryAcquireLockForNextPageTask(Integer pageNum) {
+        synchronized (lock) {
+            boolean canLoad = (dataCount < 0 || pageNum < dataCount / RxPaginationAdapter.this.pageSize)
+                    && !isPageLoadingOrLoaded(pageNum);
+            if (canLoad) {
+                currentPagesLoadInProgress.add(pageNum);
+            }
+            Logger.d("next data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+            return canLoad;
+        }
+    }
+
+    private void prefetchPreviousPage() {
+        Subscription subscribe = visiblePagesEvents
+                .map(new Func1<Integer[], Integer>() {
+                    @Override
+                    public Integer call(Integer[] pages) {
+                        return pages[0] - 1;
+                    }
+                })
+                .filter(new Func1<Integer, Boolean>() {
+                    @Override
+                    public Boolean call(Integer pageNum) {
+                        return tryAcquireLockForPrevPageTask(pageNum);
+                    }
+                })
+                .switchMap(new Func1<Integer, Observable<PageData>>() {
+                    @Override
+                    public Observable<PageData> call(Integer pageNum) {
+                        return loadDataObservable(pageNum);
+                    }
+                })
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(loadDataSubscriber);
+        subscriptions.add(subscribe);
+    }
+
+    @NonNull
+    private Boolean tryAcquireLockForPrevPageTask(Integer pageNum) {
+        synchronized (lock) {
+            boolean canLoad = pageNum >= 0 && !isPageLoadingOrLoaded(pageNum);
+            if (canLoad) {
+                currentPagesLoadInProgress.add(pageNum);
+            }
+            Logger.d("prev data " + (canLoad ? "can load page = " : "CANNOT load page = ") + pageNum);
+            return canLoad;
+        }
     }
 
     private boolean isPageLoadingOrLoaded(Integer pageNum) {
         boolean loadInProgress = currentPagesLoadInProgress.contains(pageNum);
-        Logger.d(String.format("page %d is %s loading.", pageNum, loadInProgress ? "" : "NOT"));
+        Logger.d("page %d is %s loading.", pageNum, loadInProgress ? "" : "NOT");
         return loadInProgress || isPageLoaded(pageNum, true);
     }
 
@@ -188,19 +240,11 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                         return pageData;
                     }
                 })
-                .doOnNext(new Action1<PageData>() {
-                    @Override
-                    public void call(PageData pageData) {
-                        Logger.d("loadDataObservable doOnNext for page = " + pageData.pageNum);
-                    }
-                })
                 .doOnTerminate(new Action0() {
                     @Override
                     public void call() {
-                        synchronized (lock) {
-                            Logger.d("loadDataObservable doOnTerminate for page = " + pageNum);
-                            currentPagesLoadInProgress.remove(pageNum);
-                        }
+                        Logger.d("loadDataObservable doOnTerminate for page = " + pageNum);
+                        currentPagesLoadInProgress.remove(pageNum);
                     }
                 })
                 .doOnUnsubscribe(new Action0() {
@@ -229,7 +273,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
 
         @Override
         public void onError(Throwable e) {
-            Logger.e(e, "loadDataSubscriber onError\n");
+            Logger.wtf(e, "loadDataSubscriber onError\n");
         }
 
         @Override
@@ -260,11 +304,13 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
                 int[] lastPositions = sglm.findLastVisibleItemPositions(null);
                 Arrays.sort(lastPositions);
                 lastVisibleIndex = lastPositions[0];
+            } else {
+                Logger.wtf("Not supported LayoutManager!! currently only supporting Android native Layout Managers.\n");
             }
 
             visiblePages[0] = firstVisibleIndex / pageSize;
             visiblePages[1] = lastVisibleIndex / pageSize;
-            Logger.d(String.format("findVisiblePages pages are = [%d - %d]", visiblePages[0], visiblePages[1]));
+            Logger.d("findVisiblePages pages are = [%d - %d]", visiblePages[0], visiblePages[1]);
         } catch (Exception e) {
             visiblePages[0] = 0;
             visiblePages[1] = 0;
@@ -310,7 +356,7 @@ public class RxPaginationAdapter<T, VH extends RecyclerView.ViewHolder> extends 
     private boolean isPageLoaded(int pageNum, boolean log) {
         boolean isLoaded = pagesCache.get(pageNum) != null;
         if (log) {
-            Logger.d(String.format("page %d is %s loaded.", pageNum, isLoaded ? "" : "NOT"));
+            Logger.d("page %d is %s loaded.", pageNum, isLoaded ? "" : "NOT");
         }
         return isLoaded;
     }

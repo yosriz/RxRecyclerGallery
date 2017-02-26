@@ -28,10 +28,17 @@ public final class RxPagination {
     }
 
     public static class Builder<T, VH extends RecyclerView.ViewHolder> {
+        private static final int DEFAULT_THROTTLING_INTERVAL_MILLIS = 500;
+        private static final int DEFAULT_CACHE_SIZE = 50;
+        private static final int DEFAULT_MAX_CONCURRENCY = 2;
+
         private final RecyclerView recyclerView;
-        private int pageSize;
+        private int pageSize = 0;
         private ViewHandlers<T, VH> viewHandlers;
         private DataLoader dataLoader;
+        private long intervalMillis = DEFAULT_THROTTLING_INTERVAL_MILLIS;
+        private int cacheSize = DEFAULT_CACHE_SIZE;
+        private int concurrencyLevel = DEFAULT_MAX_CONCURRENCY;
 
         private Builder(RecyclerView recyclerView) {
             this.recyclerView = recyclerView;
@@ -52,8 +59,36 @@ public final class RxPagination {
             return this;
         }
 
+        public Builder<T, VH> setThrottlingInterval(long intervalMillis) {
+            this.intervalMillis = intervalMillis;
+            return this;
+        }
+
+        public Builder<T, VH> setCacheSize(int size) {
+            this.cacheSize = size;
+            return this;
+        }
+
+        public Builder<T, VH> setConcurrencyLevel(int concurrencyLevel) {
+            this.concurrencyLevel = concurrencyLevel;
+            return this;
+        }
+
         public RxPaginationAdapter<T, VH> build() {
-            RxPaginationAdapter<T, VH> adapter = new RxPaginationAdapter<>(recyclerView, pageSize, viewHandlers, dataLoader);
+            String errors = "";
+            if (viewHandlers == null) {
+                errors += "viewHandlers can't be null!\n";
+            }
+            if (pageSize <= 0) {
+                errors += "pageSize must be positive value!\n";
+            }
+            if (dataLoader == null) {
+                errors += "dataLoader can't be null!\n";
+            }
+            if (!errors.isEmpty()) {
+                throw new IllegalArgumentException(errors);
+            }
+            RxPaginationAdapter<T, VH> adapter = new RxPaginationAdapter<>(recyclerView, pageSize, viewHandlers, dataLoader, intervalMillis, cacheSize, concurrencyLevel);
             recyclerView.setAdapter(adapter);
             return adapter;
         }

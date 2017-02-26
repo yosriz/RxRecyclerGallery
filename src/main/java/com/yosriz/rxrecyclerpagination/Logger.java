@@ -6,7 +6,7 @@ import android.util.Log;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class Logger {
+class Logger {
 
     private static final int MAX_TAG_LENGTH = 23;
     private static final int CALL_STACK_INDEX = 2;
@@ -62,9 +62,11 @@ public class Logger {
     }
 
     public static void wtf(String format, Object... args) {
-        if (shouldLog) {
-            Log.wtf(createTag(), String.format(format, args));
-        }
+        Log.wtf(createTag(), String.format(format, args));
+    }
+
+    public static void wtf(Throwable ex, String format, Object... args) {
+        Log.wtf(createTag(), String.format(format, args), ex);
     }
 
     private static String createTag() {
